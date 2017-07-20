@@ -77,7 +77,6 @@ class WPEAC_Admin {
 	 */
 	function cache_menu_settings_page() {
 		$options = WPEAC_Core::get();
-		$smarter_cache_enabled = $options['smarter_cache_enabled'];
 		?>
 		<div class="wrap">
 			<h2>Cache Options</h2>
@@ -126,7 +125,7 @@ class WPEAC_Admin {
 						</p>
 						<td>
 							<select id="last_modified_enabled" name ="<?php echo esc_attr( WPEAC_Core::CONFIG_OPTION . '[last_modified_enabled]' ); ?>">
-								<?php $last_modified_enabled = WPEAC_Core::get( 'last_modified_enabled' ) ?>
+								<?php $last_modified_enabled = $options['last_modified_enabled'] ?>
 								<option value='1' <?php selected( $last_modified_enabled, 1 ); ?> >On</option>
 								<option value='0' <?php selected( $last_modified_enabled, 0 ); ?> >Off</option>
 								<option value='2' <?php selected( $last_modified_enabled, 2 ); ?> >Only Enabled for Posts and Pages</option>
@@ -135,6 +134,7 @@ class WPEAC_Admin {
 					</tr>
 				</table>
 				<?php submit_button(); ?>
+				<input type="hidden" id="wpe_ac_global_last_modified" name="<?php echo esc_attr( WPEAC_Core::CONFIG_OPTION . '[wpe_ac_global_last_modified]' ); ?>" value="<?php echo WPEAC_Core::get( 'wpe_ac_global_last_modified' )?>"/>
 			</form>
 			<table class="form-table">
 				<tr valign="top">
@@ -146,13 +146,14 @@ class WPEAC_Admin {
 				<br> <br>
 				This option will allow you to update the global Last-Modified headers on the site. This will force bots and browser that respect those headers to download a new version of each page. Doing so may cause a load during bot crawls, so it's recommended to avoid updating this if at all possible, especially on large sites.
 			</p>
-			<div id="results2"><?php echo esc_html( 'Global Last-Modified Header currently set to ' . gmdate( 'D, d M Y H:i:s 	T', WPEAC_Core::get( 'wpe_ac_global_last_modified' ) ) )?></div>
+			<div id="wpe_ac_global_last_modified_text"><?php echo esc_html( 'Global Last-Modified Header currently set to ' . gmdate( 'D, d M Y H:i:s 	T',  WPEAC_Core::get( 'wpe_ac_global_last_modified' ) ) )?></div>
 			<br>
 			<button class="button-primary" id="reset_global_last_modified" style="float:left">Reset Last-Modified</button>
 			<br>
 			<br>
 			<br>
 			<!-- Add a button to purge specific posts from cache -->
+			<!-- only add the button on a WP ENGINE site -->
 			<?php if ( isset( $_SERVER['IS_WPE'] ) ) { ?>
 				<table class="form-table">
 					<tr valign="top">
@@ -163,7 +164,7 @@ class WPEAC_Admin {
 						</td>
 					</tr>
 				</table>
-				<div id="results"><br></div>
+				<div id="purge_results_text"><br></div>
 				<br>
 				<button class="button-primary" id="purge_varnish_post_id" style="float:left">Purge Post</button>
 		</div><!-- .wrap -->
@@ -241,7 +242,7 @@ class WPEAC_Admin {
 	 */
 	function reset_global_last_modified_callback() {
 		$this->update_global_last_modified();
-		echo 'Global Last-Modified Header updated to ' . gmdate( 'D, d M Y H:i:s T', WPEAC_Core::get( 'wpe_ac_global_last_modified' ) );
+		echo WPEAC_Core::get( 'wpe_ac_global_last_modified' );
 		wp_die(); // this is required to terminate immediately and return a proper response
 	}
 	//__________________________________________________________________________________________________________________
@@ -253,7 +254,7 @@ class WPEAC_Admin {
 	 *
 	 * @since 0.1.1
 	 * @action admin_init
-	 * @see get_sanitized_post_types, cache_control_settings_register,  default_cache_control_to_hour
+	 * @see get_sanitized_post_types, cache_control_settings_register,
 	 * @uses register_setting
 	 * @return null
 	 */
@@ -279,7 +280,7 @@ class WPEAC_Admin {
 	function update_global_last_modified() {
 		$current_global_variable = date( 'U' );
 		/**
-		 * Update global last modified variable.
+		 * Filter global last mod var
 		 *
 		 * Allows the customization of global last_modified variable.
 		 *
@@ -291,12 +292,13 @@ class WPEAC_Admin {
 		WPEAC_Core::update( 'wpe_ac_global_last_modified', (int) $current_global_variable );
 	}
 	/**
-	 * Register Cache options for each post_type
+	 * Set Default Cache Times
 	 *
-	 * Actually goes through and registers each setting for the valid post types being passed.
+	 * Works with other function to set cache times when none are present.
+	 *
+	 * @TODO This function seems largely useless and can be condensed with default_cache_control_to_hour or vice versa
 	 *
 	 * @since 0.1.1
-	 * @see validate_cache_control_settings(
 	 * @uses register_setting
 	 * @param string $post_type The post type that we're registering settings against
 	 * @return null
@@ -323,22 +325,36 @@ class WPEAC_Admin {
 	}
 
 	/**
-	 * Validate Cache values
+	 * Validate all options
 	 *
-	 * Validate the cache options we're setting are valid, and are part of our global array.
-	 * Defaults to 1 hour if the option being set isn't valid.
+	 * Validates all options being passed in as part of our option blob on form submit
 	 *
 	 * @since 0.1.2
-	 * @global array VALID_CACHE_CONTROL_OPTIONS {
-	 *         Array of valid cache control times from the global variable
-	 * @return int $input Cache control option
+	 * @param array $options the options blob being saved to the database
+	 * @see return_validations_array
+	 * @uses filter_var_array
+	 * @return array $options Validated options array
 	 */
 	function validate_cache_control_settings( $options ) {
 		$current = WPEAC_Core::get();
 		if ( ! is_array( $options ) ) {
 			return $current;
 		}
-
+		$validations = $this->return_validations_array();
+		$options = filter_var_array( $options, $validations );
+		return $options;
+	}
+	/**
+	 * Return Validation Array
+	 *
+	 * Returns the array of validators to compare to the options passed in when saving the values to the database
+	 *
+	 * @since 0.4.1
+	 * @see validate_cache_control_settings
+	 * @return array $validations
+	 */
+	public function return_validations_array() {
+		$sanitized_post_types = $this->get_sanitized_post_types();
 		$validations = array(
 			'sanitized_post_types' => array(
 				'filter' => FILTER_SANITIZE_STRING,
@@ -348,18 +364,14 @@ class WPEAC_Admin {
 				'filter' => FILTER_SANITIZE_STRING,
 				'flags'  => FILTER_FORCE_ARRAY,
 			),
-			'smarter_cache_enabled'        => FILTER_VALIDATE_INT,
-			'last_modified_enabled'        => FILTER_VALIDATE_INT,
+			'smarter_cache_enabled'        => FILTER_SANITIZE_STRING,
+			'last_modified_enabled'        => FILTER_SANITIZE_STRING,
 			'wpe_ac_global_last_modified'  => FILTER_SANITIZE_STRING,
 		);
-		if ( isset( $current['sanitized_post_types'] ) ) {
-			foreach ( $current['sanitized_post_types'] as $post_type ) {
-				$validations[ $post_type . '_cache_expires_value' ] = FILTER_SANITIZE_STRING;
-			}
+		foreach ( $sanitized_post_types as $post_type ) {
+			$validations[ $post_type . '_cache_expires_value' ] = FILTER_SANITIZE_STRING;
 		}
-		// $options = filter_var_array( $options, $validations );
-		// echo '<pre>';var_dump($options);die();
-		return $options;
+		return $validations;
 	}
 	/**
 	 * Purges cache based on post number
@@ -372,12 +384,17 @@ class WPEAC_Admin {
 	 * @uses get_post_type, get_the_title
 	 * @param string $post_id This should be the number to a valid post, human input.
 	 * @return string $purge_response Purge response based on input
+	 *
+	 * @TODO Maybe we can have this work using post titles? Maybe not, since people typo a lot?
 	 */
 	public static function purge_cache_by_post_id( $post_id ) {
 		if ( ! class_exists( WpeCommon ) ) {
 			$purge_response = 'This function only works on a WP Engine installation.';
 		} elseif ( 1 == $post_id ) {
 			$purge_response = "Post ID #1 Will purge the entire cache, I'd recommend using the Purge All Caches button to get this done";
+		} elseif ( method_exists( WpeCommon, purge_varnish_cache ) != true ) {
+			//If we mess with the purge_varnish_cache function, I don't want to hard error anyone.
+			$purge_response = 'There may be something wrong with the WP Engine Function that this feature uses. Use the standard purge cache instead.';
 		} elseif ( in_array( get_post_type( $post_id ), WPEAC_Core::get( 'sanitized_post_types' ) ) ) {
 			WpeCommon::purge_varnish_cache( (int) $post_id );
 			$post_title = get_the_title( $post_id );
